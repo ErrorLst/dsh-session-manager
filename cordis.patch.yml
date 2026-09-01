@@ -1,0 +1,6 @@
+# dsh-session-manager bundle：向组合挂载 Host half（会话枚举 / 删除 / 自动清理 API）。
+# 浏览器端由 package.json 的 dsh.client 声明自动进入 boot 图（lib/client.js），
+# 与 dsh-global-font / dsh-notes 同一通道。
+- insert:
+    - id: dsh-session-manager
+      name: '@dsh-external/dsh-session-manager'
