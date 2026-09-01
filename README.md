@@ -29,18 +29,12 @@ DSH 当前没有官方“删除会话”API（`session-controller` 只暴露 lis
 ## 安装
 
 ```sh
-dsh plugin --profile web add <本仓库路径>
+dsh plugin --profile web add github:ErrorLst/dsh-session-manager
 ```
 
 本包声明了 `dsh.bundle.patch`：`dsh plugin add` 成功后 reconcile 会自动把它登记进 profile 的 bundle 层（`dsh.profile.bundles`），无需手动编辑配置；重启 dsh web 即生效。
 
-手动接线（无 `dsh plugin` CLI 时）：
-
-1. 在 `~/.dsh/profiles/web/package.json` 中：
-   - `dependencies` 增加 `"@dsh-external/dsh-session-manager": "link:<本仓库路径>"`
-   - `dsh.profile.bundles` 增加 `"@dsh-external/dsh-session-manager"`
-2. 在 `~/.dsh/profiles/web` 下执行 `pnpm install`（建立连接符号链接）。
-3. 重启 dsh web，刷新 GUI 页面。
+本地开发安装（同一目录即本仓库 checkout）：`dsh plugin --profile web add <本仓库路径>`。
 
 ## 使用
 
