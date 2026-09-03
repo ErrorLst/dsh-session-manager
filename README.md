@@ -21,8 +21,8 @@
 
 DSH 当前没有官方“删除会话”API（`session-controller` 只暴露 list/search/create/…/cancel）。本插件的宿主端直接作用于持久化层：
 
-- **枚举**：`ctx.sessionPersistence.list()` 列出全部持久化会话头；`ctx.sessions.list()` 补充尚未落盘的 live 会话。冷会话的“最近更新时间”取 JSONL 日志工件（`~/.dsh/sessions/…/session.jsonl.zstd`）的 mtime，live 会话取最后一条事件时间。
-- **删除**：经 `sessionPersistence.locate(header)` 拿到后端自有的工件路径，删除日志文件并尝试移除（已变为空的）会话目录。删除前校验：无 live 会话（无写入者）、无运行中 Agent；成功后 emits `api-session/removed`，Web 端列表即时移除该行。`session-query` 的搜索索引会在下一次 reconcile 时自动清除被删会话的行。
+- **枚举**：`ctx.sessionPersistence.list()` 列出全部持久化会话（rc.1 返回会话头数组；新版 handle-seam 宿主返回快照数组——每项含 `header`，冷会话另带 `sizeBytes`——插件统一归一）；`ctx.sessions.list()` 补充尚未落盘的 live 会话。冷会话的“最近更新时间”取 JSONL 日志工件（`~/.dsh/sessions/…/session.jsonl.zstd`）的 mtime（新版快照自带字节数时直接采用），live 会话取最后一条事件时间。
+- **删除**：工件路径解析兼容两版宿主——rc.1 优先用官方 `sessionPersistence.locate(header)`；新版宿主（handle seam，服务定义不再暴露 `locate`）按 JSONL 磁盘布局（`<root>/<projectKey(cwd)|_no-cwd>/<encodeSegment(id)>`，root 取 loader 中 `@deepseek-ai/dsh-session-persistence-jsonl` 的 `config.root`，取不到回落 `$DSH_HOME/sessions`）推导并对 `session.jsonl.zstd` / `session.jsonl` 两个候选工件名做存在性探测，都找不到则报 no-location。删除时对两个候选工件逐一清理后再尝试移除（已变为空的）会话目录。删除前校验：无 live 会话（无写入者）、无运行中 Agent；成功后 emits `api-session/removed`，Web 端列表即时移除该行。`session-query` 的搜索索引会在下一次 reconcile 时自动清除被删会话的行。
 - **批量删除**：与逐条删除同一实现，遍历筛选「非子代理、非打开中/运行中、最近更新早于 `maxAgeDays` 天」的会话依次删除。
 - **可配置阈值**：三个阈值写 host 侧 `storage` 域（`~/.dsh/storages/dsh_session_manager.json`，`dsh_session_manager` 域），设置页 `set-config` 保存后立即生效；配置域不可用（storage 未挂载）时回落包内 `config.json` 基线。
 - **告警**：无任何定时/自动删除行为；`GET` 快照附带阈值配置与统计（总数 / 总大小 / 已逾期货），由浏览器端在设置页展示、并在页面加载时检查一次是否弹窗。
