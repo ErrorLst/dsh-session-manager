@@ -15,15 +15,15 @@
 | 启动告警弹窗 | 总会话数量超过 `maxSessions` 或日志总大小超过 `maxTotalSizeMB` 时，页面加载后弹窗提醒（每次加载至多一次），引导去设置页处理 |
 | 阈值总览 | 设置页实时展示当前会话数 / 日志总大小 与上限对比，超限标红 |
 | 缓存优先加载 | 设置页与告警弹窗走「本地缓存即时显示 + 后台静默刷新」：打开页面先渲染上次数据（显示缓存时间），后台拉新；加载失败不清空当前视图。告警弹窗使用轻量 `summary` 接口（不含会话列表），首次无缓存时也只需小请求 |
-| 安全护栏 | 打开中 / 运行中的会话、子代理会话不参与批量删除，也不可手动删除；删除只作用于会话日志工件 |
+| 安全护栏 | 打开中 / 运行中的会话不参与批量删除，也不可手动删除；子代理会话须「冷 + 父会话已关闭」才可删（父仍打开时手动拒删、批量自动跳过并计入跳过统计）；删除只作用于会话日志工件 |
 
 ## 原理
 
 DSH 当前没有官方“删除会话”API（`session-controller` 只暴露 list/search/create/…/cancel）。本插件的宿主端直接作用于持久化层：
 
 - **枚举**：`ctx.sessionPersistence.list()` 列出全部持久化会话（rc.1 返回会话头数组；新版 handle-seam 宿主返回快照数组——每项含 `header`，冷会话另带 `sizeBytes`——插件统一归一）；`ctx.sessions.list()` 补充尚未落盘的 live 会话。冷会话的“最近更新时间”取 JSONL 日志工件（`~/.dsh/sessions/…/session.jsonl.zstd`）的 mtime（新版快照自带字节数时直接采用），live 会话取最后一条事件时间。
-- **删除**：工件路径解析兼容两版宿主——rc.1 优先用官方 `sessionPersistence.locate(header)`；新版宿主（handle seam，服务定义不再暴露 `locate`）按 JSONL 磁盘布局（`<root>/<projectKey(cwd)|_no-cwd>/<encodeSegment(id)>`，root 取 loader 中 `@deepseek-ai/dsh-session-persistence-jsonl` 的 `config.root`，取不到回落 `$DSH_HOME/sessions`）推导并对 `session.jsonl.zstd` / `session.jsonl` 两个候选工件名做存在性探测，都找不到则报 no-location。删除时对两个候选工件逐一清理后再尝试移除（已变为空的）会话目录。删除前校验：无 live 会话（无写入者）、无运行中 Agent；成功后 emits `api-session/removed`，Web 端列表即时移除该行。`session-query` 的搜索索引会在下一次 reconcile 时自动清除被删会话的行。
-- **批量删除**：与逐条删除同一实现，遍历筛选「非子代理、非打开中/运行中、最近更新早于 `maxAgeDays` 天」的会话依次删除。
+- **删除**：工件路径解析兼容两版宿主——rc.1 优先用官方 `sessionPersistence.locate(header)`；新版宿主（handle seam，服务定义不再暴露 `locate`）按 JSONL 磁盘布局（`<root>/<projectKey(cwd)|_no-cwd>/<encodeSegment(id)>`，root 取 loader 中 `@deepseek-ai/dsh-session-persistence-jsonl` 的 `config.root`，取不到回落 `$DSH_HOME/sessions`）推导并对 `session.jsonl.zstd` / `session.jsonl` 两个候选工件名做存在性探测，都找不到则报 no-location。删除时对两个候选工件逐一清理后再尝试移除（已变为空的）会话目录。删除前校验：无 live 会话（无写入者）、无运行中 Agent；子代理会话（`origin: subagent`）另要求父会话已关闭（父不在 SessionStore；父 id 缺失的孤儿视为已关闭），父仍打开时返回 `409 subagent-parent-live`。成功后 emits `api-session/removed`，Web 端列表即时移除该行。`session-query` 的搜索索引会在下一次 reconcile 时自动清除被删会话的行。
+- **批量删除**：与逐条删除同一实现，遍历筛选「最近更新早于 `maxAgeDays` 天、非打开中/运行中、工件存在，且（非子代理或父会话已关闭）」的会话依次删除；已过期但父会话仍打开的子代理自动跳过并计入跳过统计的 `subagent` 计数（父关闭后的下一轮即转为候选，与手动删除策略一致）。
 - **可配置阈值**：三个阈值写 host 侧 `storage` 域（`~/.dsh/storages/dsh_session_manager.json`，`dsh_session_manager` 域），设置页 `set-config` 保存后立即生效；配置域不可用（storage 未挂载）时回落包内 `config.json` 基线。
 - **告警**：无任何定时/自动删除行为；`GET` 快照附带阈值配置与统计（总数 / 总大小 / 已逾期货），由浏览器端在设置页展示、并在页面加载时检查一次是否弹窗。
 
@@ -44,7 +44,7 @@ dsh plugin --profile web add github:ErrorLst/dsh-session-manager
 1. 重启 dsh web 后刷新页面（新 client bundle 自动生效）。
 2. 打开侧栏 **设置 → 会话管理**：
    - 排序（创建日期 / 最近更新 × 升序 / 降序）；
-   - 每行“删除”按钮（点两次确认，打开中/运行中不可删）；
+   - 每行“删除”按钮（点两次确认，打开中/运行中不可删；子代理会话须父会话已关闭才可删）；
    - “批量删除（> N 天：M 个）”按钮（点两次确认）删除全部过期会话；
    - 三个阈值直接在输入框修改后点「保存」（立即生效，无需重启）；「恢复默认」回到基线；
    - 顶部实时显示当前会话数、日志总大小、逾期货，与告警上限对比。
@@ -82,10 +82,14 @@ dsh plugin --profile web remove @dsh-external/dsh-session-manager
 
 - DSH 无原生删除 API：删除直接作用于 `session-persistence-jsonl` 日志工件，不涉及工作区文件、附件、spill 等其它存储；会话目录若含其它工件则只删除日志文件、保留目录。
 - 打开中（`SessionStore` 已挂载）或运行中的会话不可删除（批量删除会跳过并计数），避免与写入者竞争；当前正在使用的会话因此需要先关闭（冷态后才可删）。
-- 批量删除不处理子代理会话（`origin: subagent`），它们的生命周期与父会话关联。
+- 子代理会话（`origin: subagent`）随父会话生命周期管理：冷态且父会话已关闭才可删除（手动 / 批量一致）；父仍打开时手动删除返回 `409 subagent-parent-live`、批量删除自动跳过并计入跳过统计，父关闭后的下一轮批量删除即会清理。
 - 告警弹窗只在浏览器页面加载时检查一次并提示一次；阈值变化（设置页保存或重置）即影响下一次检查与批量删除。
 - 若部署了 `session-query-sqlite` 搜索索引：被删会话的行在下一次搜索/观察 reconcile 时清除，期间搜索不会命中已删会话（索引行只增删不改）。
 
 ## 插件管理
 
 已装插件用 plugin-registry 的**薄控制台**管理（浏览器面板）：管理 profile 插件安装态（bundle 层栈 + insert 行 + 启停），无需手改配置。
+
+## 变更记录
+
+- **0.3.3（子代理会话删除策略）**：子代理会话的删除条件由「一律不可删」放开为「冷态（非打开中 / 运行中）且父会话已关闭」（父 id 缺失的孤儿视为已关闭），手动逐条删除与自动批量删除策略一致；父仍打开的子代理手动删除返回 `409 subagent-parent-live`、批量删除自动跳过并计入 `skipped.subagent`；快照行新增 `parentClosed` 字段，设置页「批量删除（> N 天：M 个）」按钮数与实际可删数保持一致。

@@ -1,7 +1,7 @@
 {
   "name": "@dsh-external/dsh-session-manager",
   "description": "会话管理插件：设置页查看全部会话（按创建日期/最近更新排序、手动删除、可配置阈值批量删除）；会话数量或日志总大小超过阈值时启动弹窗提醒",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "type": "module",
   "main": "lib/index.mjs",
