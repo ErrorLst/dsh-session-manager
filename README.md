@@ -92,4 +92,5 @@ dsh plugin --profile web remove @dsh-external/dsh-session-manager
 
 ## 变更记录
 
+- **0.3.5（适配 dsh 0.1.5-alpha.1）**：会话工件探测确认覆盖 v3（`session.v3.jsonl.zstd`，正则为泛化代名，未来代同样命中）；`sizeBytes` 改为对会话目录下**全部代工件求和**（格式迁移会把旧代文件留在同一目录，快照自带的 sizeBytes 只算当前代 → 日志大小上限告警与批量删除统计偏小）；删除多余的 `dsh.client.inject`（浏览器半只 require react，多声明的 inject 会在宿主客户端服务改名时让整块设置卡片静默不激活）；注释标注官方 `locate()` 是 private 方法、只当加速用。
 - **0.3.3（子代理会话删除策略）**：子代理会话的删除条件由「一律不可删」放开为「冷态（非打开中 / 运行中）且父会话已关闭」（父 id 缺失的孤儿视为已关闭），手动逐条删除与自动批量删除策略一致；父仍打开的子代理手动删除返回 `409 subagent-parent-live`、批量删除自动跳过并计入 `skipped.subagent`；快照行新增 `parentClosed` 字段，设置页「批量删除（> N 天：M 个）」按钮数与实际可删数保持一致。
