@@ -21,8 +21,8 @@
 
 DSH 当前没有官方“删除会话”API（`session-controller` 只暴露 list/search/create/…/cancel）。本插件的宿主端直接作用于持久化层：
 
-- **枚举**：`ctx.sessionPersistence.list()` 列出全部持久化会话（rc.1 返回会话头数组；新版 handle-seam 宿主返回快照数组——每项含 `header`，冷会话另带 `sizeBytes`——插件统一归一）；`ctx.sessions.list()` 补充尚未落盘的 live 会话。冷会话的“最近更新时间”取 JSONL 日志工件（`~/.dsh/sessions/…/session[.vN].jsonl[.zstd]`，0.1.3 起当前代是 `session.v2.jsonl.zstd`）的 mtime（新版快照自带字节数时直接采用），live 会话取最后一条事件时间。
-- **删除**：工件路径解析兼容两版宿主——官方 `sessionPersistence.locate(header)` 可用时取其「当前代」路径，但该路径可能尚未物化（旧会话仍只有 v0/v1 工件），因此仍要在会话目录里做存在性探测；`locate` 不可用时（handle seam 的服务定义不再声明它）按 JSONL 磁盘布局（`<root>/<projectKey(cwd)|_no-cwd>/<encodeSegment(id)>`，root 取 loader 中 `@deepseek-ai/dsh-session-persistence-jsonl` 的 `config.root`，取不到回落 `$DSH_HOME/sessions`）推导。目录内按官方代文件名规则 `session[.vN].jsonl[.zstd]`（v0 = `session.jsonl`，vN = `session.vN.jsonl`，zstd 编码再加 `.zstd`；见 `@deepseek-ai/dsh-session-format/src/filename.ts`）列出全部工件，一个都没有则报 no-location。删除时把这些工件逐一清理后再尝试移除（已变为空的）会话目录；其它文件一律不动。删除前校验：无 live 会话（无写入者）、无运行中 Agent；子代理会话（`origin: subagent`）另要求父会话已关闭（父不在 SessionStore；父 id 缺失的孤儿视为已关闭），父仍打开时返回 `409 subagent-parent-live`。成功后 emits `api-session/removed`，Web 端列表即时移除该行。`session-query` 的搜索索引会在下一次 reconcile 时自动清除被删会话的行。
+- **枚举**：`ctx.sessionPersistence.list()` 列出全部持久化会话（rc.1 返回会话头数组；新版 handle-seam 宿主返回快照数组——每项含 `header`，冷会话另带 `sizeBytes`——插件统一归一）；`ctx.sessions.list()` 补充尚未落盘的 live 会话。冷会话的“最近更新时间”取 JSONL 日志工件（`~/.dsh/sessions/…/session[.vN].jsonl[.zstd]`，当前代是 `session.v3.jsonl.zstd`；官方 `SESSION_FORMAT_VERSION = 3`，`dsh 0.1.5-alpha.1` 起发布，0.1.3 时曾为 v2）的 mtime（新版快照自带字节数时直接采用），live 会话取最后一条事件时间。
+- **删除**：工件路径解析兼容两版宿主——官方 `sessionPersistence.locate(header)` 可用时取其「当前代」路径，但该路径可能尚未物化（旧会话仍只有 v0/v1 工件），因此仍要在会话目录里做存在性探测；`locate` 不可用时（handle seam 的服务定义不再声明它）按 JSONL 磁盘布局（`<root>/<projectKey(cwd)|_no-cwd>/<encodeSegment(id)>`，root 取 loader 中 `@deepseek-ai/dsh-session-persistence-jsonl` 的 `config.root`，取不到回落 `$DSH_HOME/sessions`）推导。目录内按官方代文件名规则 `session[.vN].jsonl[.zstd]`（v0 = `session.jsonl`，vN = `session.vN.jsonl`，zstd 编码再加 `.zstd`；见 `@deepseek-ai/dsh-session-format/src/filename.ts`）列出全部工件，一个都没有则报 no-location。删除时把这些工件逐一清理后再尝试移除（已变为空的）会话目录；其它文件一律不动。会话目录里通常还有官方写锁文件 `session.lock`（POSIX 侧常驻、0 字节，官方设计**永不删除**：删它会让后续加锁校验失去稳定 inode），本插件**不触碰**它，因此删除成功后会话目录往往只含该 lock 而保留——这是正常终态，宿主端会记一行 `logger.info` 并在内部返回 `dirKept: true`（HTTP 响应形状不变，仍是 `{ok:true,id}`）。删除前校验：无 live 会话（无写入者）、无运行中 Agent；子代理会话（`origin: subagent`）另要求父会话已关闭（父不在 SessionStore；父 id 缺失的孤儿视为已关闭），父仍打开时返回 `409 subagent-parent-live`。成功后 emits `api-session/removed`，Web 端列表即时移除该行。`session-query` 的搜索索引会在下一次 reconcile 时自动清除被删会话的行。
 - **批量删除**：与逐条删除同一实现，遍历筛选「最近更新早于 `maxAgeDays` 天、非打开中/运行中、工件存在，且（非子代理或父会话已关闭）」的会话依次删除；已过期但父会话仍打开的子代理自动跳过并计入跳过统计的 `subagent` 计数（父关闭后的下一轮即转为候选，与手动删除策略一致）。
 - **可配置阈值**：三个阈值写 host 侧 `storage` 域（`~/.dsh/storages/dsh_session_manager.json`，`dsh_session_manager` 域），设置页 `set-config` 保存后立即生效；配置域不可用（storage 未挂载）时回落包内 `config.json` 基线。
 - **告警**：无任何定时/自动删除行为；`GET` 快照附带阈值配置与统计（总数 / 总大小 / 已逾期货），由浏览器端在设置页展示、并在页面加载时检查一次是否弹窗。
@@ -80,7 +80,7 @@ dsh plugin --profile web remove @dsh-external/dsh-session-manager
 
 ## 已知边界
 
-- DSH 无原生删除 API：删除直接作用于 `session-persistence-jsonl` 日志工件，不涉及工作区文件、附件、spill 等其它存储；会话目录若含其它工件则只删除日志文件、保留目录。
+- DSH 无原生删除 API：删除直接作用于 `session-persistence-jsonl` 日志工件，不涉及工作区文件、附件、spill 等其它存储；会话目录若含其它工件则只删除日志文件、保留目录；官方写锁文件 `session.lock`（POSIX 侧常驻、0 字节、永不删除）同上，删除后目录只含它属正常终态，不是删除失败。
 - 打开中（`SessionStore` 已挂载）或运行中的会话不可删除（批量删除会跳过并计数），避免与写入者竞争；当前正在使用的会话因此需要先关闭（冷态后才可删）。
 - 子代理会话（`origin: subagent`）随父会话生命周期管理：冷态且父会话已关闭才可删除（手动 / 批量一致）；父仍打开时手动删除返回 `409 subagent-parent-live`、批量删除自动跳过并计入跳过统计，父关闭后的下一轮批量删除即会清理。
 - 告警弹窗只在浏览器页面加载时检查一次并提示一次；阈值变化（设置页保存或重置）即影响下一次检查与批量删除。
@@ -92,5 +92,6 @@ dsh plugin --profile web remove @dsh-external/dsh-session-manager
 
 ## 变更记录
 
+- **0.3.6（删除后的目录残留显式化）**：会话目录里官方常驻的 POSIX 写锁文件 `session.lock`（0 字节、永不删除）此前被静默吞掉的 `rmdir` 失败掩盖——删除成功但目录仍在，人工排查容易误判为删除失败。现在删除完成后显式判定残留：目录只剩 `session.lock` 时内部返回 `dirKept: true` 并记一行 `logger.info`（HTTP 响应形状不变，仍为 `{ok:true,id}`）；目录内还有其它文件时行为不变（保留目录、不报错、不删除）。新增 2 条回归测试固化「lock 不参与删除」「lock 不参与 `sizeBytes` 统计」两条契约；README 修正当前会话格式代（v2 → v3，官方 `SESSION_FORMAT_VERSION = 3`）。本插件永不删除 / 写入 / 截断 `session.lock`。
 - **0.3.5（适配 dsh 0.1.5-alpha.1）**：会话工件探测确认覆盖 v3（`session.v3.jsonl.zstd`，正则为泛化代名，未来代同样命中）；`sizeBytes` 改为对会话目录下**全部代工件求和**（格式迁移会把旧代文件留在同一目录，快照自带的 sizeBytes 只算当前代 → 日志大小上限告警与批量删除统计偏小）；删除多余的 `dsh.client.inject`（浏览器半只 require react，多声明的 inject 会在宿主客户端服务改名时让整块设置卡片静默不激活）；注释标注官方 `locate()` 是 private 方法、只当加速用。
 - **0.3.3（子代理会话删除策略）**：子代理会话的删除条件由「一律不可删」放开为「冷态（非打开中 / 运行中）且父会话已关闭」（父 id 缺失的孤儿视为已关闭），手动逐条删除与自动批量删除策略一致；父仍打开的子代理手动删除返回 `409 subagent-parent-live`、批量删除自动跳过并计入 `skipped.subagent`；快照行新增 `parentClosed` 字段，设置页「批量删除（> N 天：M 个）」按钮数与实际可删数保持一致。
